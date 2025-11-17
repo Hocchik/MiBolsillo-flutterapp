@@ -6,7 +6,7 @@ class DarkFeatureCard extends StatelessWidget {
   final String title;
   final String subtitle;
 
-  const DarkFeatureCard({Key? key, required this.icon, required this.title, required this.subtitle}) : super(key: key);
+  const DarkFeatureCard({super.key, required this.icon, required this.title, required this.subtitle});
 
   @override
   Widget build(BuildContext context) {
@@ -42,6 +42,8 @@ class DarkFeatureCard extends StatelessWidget {
 }
 
 class WelcomeScreen extends StatelessWidget {
+  const WelcomeScreen({super.key});
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(

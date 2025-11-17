@@ -8,12 +8,20 @@ import 'screens/dashboard_screen.dart';
 import 'screens/add_transaction_screen.dart';
 import 'screens/coach_screen.dart';
 import 'screens/goals_screen.dart';
-import 'screens/statistics_screen.dart';
+import 'screens/statistics_screen_clean.dart';
 import 'screens/account_screen.dart';
 import 'screens/transaction_list_screen.dart';
+import 'services/repository.dart';
+import 'services/currency_service.dart';
+import 'screens/conflicts_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Initialize repository (local DB + sync manager)
+  await Repository().init();
+  // Initialize currency service (loads saved selection and tries to fetch rates)
+  await CurrencyService().init();
+
   final prefs = await SharedPreferences.getInstance();
   final bool loggedIn = prefs.getBool('logged_in') ?? false;
   runApp(MyApp(initialRoute: loggedIn ? '/' : '/welcome'));
@@ -21,7 +29,7 @@ Future<void> main() async {
 
 class MyApp extends StatelessWidget {
   final String initialRoute;
-  const MyApp({Key? key, required this.initialRoute}) : super(key: key);
+  const MyApp({super.key, required this.initialRoute});
 
   @override
   Widget build(BuildContext context) {
@@ -41,6 +49,7 @@ class MyApp extends StatelessWidget {
         '/statistics': (_) => StatisticsScreen(),
         '/account': (_) => AccountScreen(),
         '/transactions': (_) => TransactionListScreen(),
+        '/conflicts': (_) => ConflictsScreen(),
       },
     );
   }

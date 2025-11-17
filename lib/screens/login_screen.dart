@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../widgets/gradient_button.dart';
+import '../services/app_config.dart';
+import '../services/auth_service.dart';
 
 class LoginScreen extends StatefulWidget {
+  const LoginScreen({super.key});
+
   @override
   State<LoginScreen> createState() => _LoginScreenState();
 }
@@ -23,16 +26,31 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _loading = true);
-    // Simular login
-    await Future.delayed(Duration(seconds: 1));
-  final prefs = await SharedPreferences.getInstance();
-  await prefs.setBool('logged_in', true);
-  // save a simple username (prefix of email) and mark as synced for demo
-  final email = _emailCtrl.text.trim();
-  final username = email.contains('@') ? email.split('@')[0] : email;
-  await prefs.setString('username', username);
-  await prefs.setBool('synced', true);
+  final api = AppConfig.apiInstance();
+    try {
+      final username = _emailCtrl.text.trim();
+      final password = _passCtrl.text;
+      final resp = await api.login(username, password);
+      // Supongo que el backend devuelve { token: '...' }
+      final token = resp['token'] as String?;
+      if (token == null) throw Exception('Token no recibido');
+
+      // Guardar token y estado de sesión
+      final auth = AuthService();
+      await auth.setAuthToken(token);
+      await auth.setLoggedIn(true);
+      await auth.setUsername(username.contains('@') ? username.split('@')[0] : username);
+      await auth.setSynced(true);
+    } catch (e) {
+      // Mostrar error
+      final err = e.toString();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error al iniciar sesión: $err')));
+      setState(() => _loading = false);
+      return;
+    }
     setState(() => _loading = false);
+    if (!mounted) return;
     Navigator.pushReplacementNamed(context, '/');
   }
 

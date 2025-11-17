@@ -1,16 +1,16 @@
 import 'package:flutter/material.dart';
 
 class GradientButton extends StatelessWidget {
-	final String text;
-	final VoidCallback onPressed;
-	final List<Color> colors;
+    	final String text;
+    	final VoidCallback onPressed;
+    	final List<Color> colors;
 
-	const GradientButton({
-		Key? key,
-		required this.text,
-		required this.onPressed,
-		this.colors = const [Color(0xFF9AEF5E), Color(0xFFF1C232)],
-	}) : super(key: key);
+    	const GradientButton({
+    		super.key,
+    		required this.text,
+    		required this.onPressed,
+    		this.colors = const [Color(0xFF9AEF5E), Color(0xFFF1C232)],
+    	});
 
 	@override
 	Widget build(BuildContext context) {
@@ -22,7 +22,7 @@ class GradientButton extends StatelessWidget {
 				borderRadius: BorderRadius.circular(10),
 				boxShadow: [
 					BoxShadow(
-						color: colors.last.withOpacity(0.22),
+						color: colors.last.withAlpha((0.22 * 255).round()),
 						blurRadius: 8,
 						offset: Offset(0, 4),
 					)

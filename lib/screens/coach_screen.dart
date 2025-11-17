@@ -1,12 +1,35 @@
 import 'package:flutter/material.dart';
 import '../widgets/shell_scaffold.dart';
+import '../services/repository.dart';
+import '../utils/formatters.dart';
 
-class CoachScreen extends StatelessWidget {
-  const CoachScreen({Key? key}) : super(key: key);
+class CoachScreen extends StatefulWidget {
+  const CoachScreen({super.key});
+
+  @override
+  State<CoachScreen> createState() => _CoachScreenState();
+}
+
+class _CoachScreenState extends State<CoachScreen> {
+  Map<String, dynamic>? _stats;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final s = await Repository().computeStats();
+    if (mounted) setState(() => _stats = s);
+  }
 
   @override
   Widget build(BuildContext context) {
     final cardBg = const Color(0xFF161616);
+    final double? healthIndex = (_stats?['savingsRate'] as num?)?.toDouble();
+    final double? balance = (_stats?['balance'] as num?)?.toDouble();
+    final String coachSummary = (_stats?['coachSummary'] as String?) ?? '---';
     return ShellScaffold(
       currentIndex: 2,
       body: SingleChildScrollView(
@@ -48,17 +71,17 @@ class CoachScreen extends StatelessWidget {
                       children: [
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: const [
-                            Text('Salud Financiera', style: TextStyle(color: Colors.white)),
-                            Chip(label: Text('Excelente', style: TextStyle(color: Colors.white)), backgroundColor: Color(0xFF2E7D32)),
+                          children: [
+                            const Text('Salud Financiera', style: TextStyle(color: Colors.white)),
+                            Chip(label: Text(_stats != null ? (healthIndex != null ? fmtPercentOrPlaceholder(healthIndex) : '—') : '—', style: const TextStyle(color: Colors.white)), backgroundColor: const Color(0xFF2E7D32)),
                           ],
                         ),
                         const SizedBox(height: 8),
-                        const Text('100', style: TextStyle(color: Colors.white, fontSize: 30, fontWeight: FontWeight.bold)),
+                        Text(fmtPercentOrPlaceholder(healthIndex), style: const TextStyle(color: Colors.white, fontSize: 30, fontWeight: FontWeight.bold)),
                         const SizedBox(height: 8),
-                        const LinearProgressIndicator(value: 1.0, color: Color(0xFF9AEF5E), backgroundColor: Colors.white10),
+                        LinearProgressIndicator(value: healthIndex ?? 0.0, color: const Color(0xFF9AEF5E), backgroundColor: Colors.white10),
                         const SizedBox(height: 8),
-                        const Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text('Tasa de Ahorro', style: TextStyle(color: Colors.white70)), Text('Balance \$2850', style: TextStyle(color: Colors.white))]),
+                        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [const Text('Tasa de Ahorro', style: TextStyle(color: Colors.white70)), Text(fmtMoneyOrPlaceholder(balance), style: const TextStyle(color: Colors.white))]),
                       ],
                     ),
                   ),
@@ -79,12 +102,12 @@ class CoachScreen extends StatelessWidget {
                         Container(
                           padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(color: const Color(0xFF0F2E12), borderRadius: BorderRadius.circular(8)),
-                          child: const Column(
+                          child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text('¡Excelente trabajo!', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                              SizedBox(height: 6),
-                              Text('Estás ahorrando un 81% de tus ingresos. Considera invertir parte de estos ahorros para hacerlos crecer.', style: TextStyle(color: Colors.white70)),
+                              Text(coachSummary, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                              const SizedBox(height: 6),
+                              const Text('Revisa las acciones recomendadas para mejorar tu salud financiera.', style: TextStyle(color: Colors.white70)),
                             ],
                           ),
                         ),

@@ -3,7 +3,7 @@ import '../services/auth_service.dart';
 
 class TopHeader extends StatefulWidget implements PreferredSizeWidget {
   final String? title;
-  const TopHeader({Key? key, this.title}) : super(key: key);
+  const TopHeader({super.key, this.title});
 
   @override
   State<TopHeader> createState() => _TopHeaderState();
@@ -43,15 +43,13 @@ class _TopHeaderState extends State<TopHeader> {
     });
   }
 
-  void _openAccount(BuildContext context) {
-    // open account screen
-    Navigator.pushReplacementNamed(context, '/account');
-  }
 
-  void _onProfileTap(BuildContext context) async {
+
+  void _onProfileTap() async {
     final logged = await AuthService().isLoggedIn();
+    if (!mounted) return;
     if (logged) {
-      _openAccount(context);
+      Navigator.pushReplacementNamed(context, '/account');
       return;
     }
 
@@ -73,7 +71,7 @@ class _TopHeaderState extends State<TopHeader> {
             const SizedBox(height: 8),
             const Text('Debes iniciar sesión para acceder a tu cuenta', style: TextStyle(color: Colors.white60), textAlign: TextAlign.center),
             const SizedBox(height: 16),
-            ElevatedButton(onPressed: () { Navigator.of(ctx).pop(); Navigator.pushNamed(context, '/login'); }, style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF9AEF5E), foregroundColor: Colors.black), child: const Text('Iniciar Sesión'))
+            ElevatedButton(onPressed: () { Navigator.of(ctx).pop(); Navigator.pushNamed(ctx, '/login'); }, style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF9AEF5E), foregroundColor: Colors.black), child: const Text('Iniciar Sesión'))
           ]),
         ),
       ),
@@ -132,7 +130,7 @@ class _TopHeaderState extends State<TopHeader> {
                     ConstrainedBox(constraints: const BoxConstraints(maxWidth: 120), child: Text(_synced ? 'Sincronizado' : 'No sincronizado', style: const TextStyle(color: Colors.white70, fontSize: 12), overflow: TextOverflow.ellipsis)),
                   ]),
                 ),
-              IconButton(onPressed: () => _onProfileTap(context), icon: const Icon(Icons.person, color: Colors.white70)),
+              IconButton(onPressed: _onProfileTap, icon: const Icon(Icons.person, color: Colors.white70)),
             ],
           ),
         ],

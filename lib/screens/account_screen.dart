@@ -3,7 +3,7 @@ import '../widgets/shell_scaffold.dart';
 import '../services/auth_service.dart';
 
 class AccountScreen extends StatefulWidget {
-  const AccountScreen({Key? key}) : super(key: key);
+  const AccountScreen({super.key});
 
   @override
   State<AccountScreen> createState() => _AccountScreenState();
@@ -33,6 +33,7 @@ class _AccountScreenState extends State<AccountScreen> {
 
   Future<void> _logout() async {
     await AuthService().logout();
+    if (!mounted) return;
     Navigator.pushNamedAndRemoveUntil(context, '/welcome', (r) => false);
   }
 

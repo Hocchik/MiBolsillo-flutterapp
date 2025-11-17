@@ -4,7 +4,7 @@ import 'top_header.dart';
 class ShellScaffold extends StatelessWidget {
   final Widget body;
   final int currentIndex;
-  const ShellScaffold({Key? key, required this.body, this.currentIndex = 0}) : super(key: key);
+  const ShellScaffold({super.key, required this.body, this.currentIndex = 0});
 
   void _onNavTap(BuildContext context, int index) {
     if (index == currentIndex) return;

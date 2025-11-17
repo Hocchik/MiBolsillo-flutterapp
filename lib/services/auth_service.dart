@@ -4,6 +4,7 @@ class AuthService {
   static const _kLoggedIn = 'logged_in';
   static const _kUsername = 'username';
   static const _kSynced = 'synced';
+  static const _kAuthToken = 'auth_token';
 
   Future<bool> isLoggedIn() async {
     final prefs = await SharedPreferences.getInstance();
@@ -18,6 +19,24 @@ class AuthService {
   Future<void> logout() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_kLoggedIn);
+  }
+
+  /// Save auth token (e.g. JWT) locally
+  Future<void> setAuthToken(String token) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kAuthToken, token);
+  }
+
+  /// Get saved auth token or null
+  Future<String?> getAuthToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_kAuthToken);
+  }
+
+  /// Clear saved auth token
+  Future<void> clearAuthToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_kAuthToken);
   }
 
   Future<void> setUsername(String username) async {

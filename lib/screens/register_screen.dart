@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../widgets/gradient_button.dart';
+import '../services/app_config.dart';
+import '../services/auth_service.dart';
 
 class RegisterScreen extends StatefulWidget {
+  const RegisterScreen({super.key});
+
   @override
   State<RegisterScreen> createState() => _RegisterScreenState();
 }
@@ -25,11 +28,30 @@ class _RegisterScreenState extends State<RegisterScreen> {
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _loading = true);
-    // Simular registro/llamada a backend
-    await Future.delayed(Duration(seconds: 1));
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('logged_in', true);
+    final api = AppConfig.apiInstance();
+    try {
+      final name = _nameCtrl.text.trim();
+      final email = _emailCtrl.text.trim();
+      final password = _passCtrl.text;
+      final resp = await api.register(email, password);
+      final token = resp['token'] as String?;
+      if (token == null) throw Exception('Token no recibido');
+
+      final auth = AuthService();
+      await auth.setAuthToken(token);
+      await auth.setLoggedIn(true);
+      await auth.setUsername(name.isNotEmpty ? name : (email.contains('@') ? email.split('@')[0] : email));
+      await auth.setSynced(true);
+    } catch (e) {
+      final err = e.toString();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error al registrar: $err')));
+      setState(() => _loading = false);
+      return;
+    }
+
     setState(() => _loading = false);
+    if (!mounted) return;
     Navigator.pushReplacementNamed(context, '/');
   }
 

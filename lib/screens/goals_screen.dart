@@ -1,34 +1,79 @@
 import 'package:flutter/material.dart';
 import '../widgets/shell_scaffold.dart';
+import '../utils/formatters.dart';
+import '../services/repository.dart';
 
 class Goal {
+  String? clientId;
+  String? serverId;
   String title;
   double target;
   double saved;
   DateTime? deadline;
   IconData icon;
 
-  Goal({required this.title, required this.target, this.saved = 0, this.deadline, required this.icon});
+  Goal({this.clientId, this.serverId, required this.title, required this.target, this.saved = 0, this.deadline, required this.icon});
 
   int get progressPercent {
     if (target <= 0) return 0;
     final pct = (saved / target * 100).clamp(0, 100);
     return pct.round();
   }
+
+  factory Goal.fromMap(Map<String, dynamic> m) {
+    return Goal(
+      clientId: m['clientId'] as String?,
+      serverId: m['serverId'] as String?,
+      title: m['title'] as String? ?? 'Meta',
+      target: (m['target_amount'] as num?)?.toDouble() ?? (m['target'] as num?)?.toDouble() ?? 0.0,
+      saved: (m['saved_amount'] as num?)?.toDouble() ?? (m['saved'] as num?)?.toDouble() ?? 0.0,
+      deadline: m['deadline'] == null ? null : DateTime.tryParse(m['deadline'] as String),
+      icon: Icons.adjust,
+    );
+  }
+
+  Map<String, dynamic> toRecord() {
+    return {
+      'clientId': clientId,
+      'serverId': serverId,
+      'title': title,
+      'target_amount': target,
+      'saved_amount': saved,
+      'deadline': deadline?.toIso8601String(),
+      'updatedAt': DateTime.now().toIso8601String(),
+      'createdAt': DateTime.now().toIso8601String(),
+      'extra': null,
+    };
+  }
 }
 
 class GoalsScreen extends StatefulWidget {
-  const GoalsScreen({Key? key}) : super(key: key);
+  const GoalsScreen({super.key});
 
   @override
   State<GoalsScreen> createState() => _GoalsScreenState();
 }
 
 class _GoalsScreenState extends State<GoalsScreen> {
-  final List<Goal> _goals = [
-    Goal(title: 'Fondo de Emergencia', target: 10000, saved: 3500, deadline: DateTime.now().subtract(Duration(days: 2)), icon: Icons.album),
-    Goal(title: 'Vacaciones en Europa', target: 8000, saved: 2400, deadline: DateTime.now().add(Duration(days: 58)), icon: Icons.flight),
-  ];
+  final List<Goal> _goals = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadGoals();
+  }
+
+  Future<void> _loadGoals() async {
+    final rows = await Repository().getLocalGoals();
+    final loaded = rows.map((r) => Goal.fromMap(r)).toList();
+    if (mounted) {
+      setState(() {
+        _goals
+          ..clear()
+          ..addAll(loaded);
+      });
+    }
+  }
 
   void _openCreateGoal() async {
     final newGoal = await showModalBottomSheet<Goal>(
@@ -42,7 +87,33 @@ class _GoalsScreenState extends State<GoalsScreen> {
     );
 
     if (newGoal != null) {
-      setState(() => _goals.insert(0, newGoal));
+      // Use repository to persist and get canonical record (clientId/serverId)
+      final payload = {
+        'title': newGoal.title,
+        'target_amount': newGoal.target,
+        'saved_amount': newGoal.saved,
+        'deadline': newGoal.deadline?.toIso8601String(),
+        'createdAt': DateTime.now().toIso8601String(),
+        'updatedAt': DateTime.now().toIso8601String(),
+        'extra': null,
+      };
+
+      try {
+        final resp = await Repository().createGoal(payload);
+        // resp will be either server response or the local record
+        final record = Map<String, dynamic>.from(resp);
+        final g = Goal.fromMap(record);
+        if (!mounted) return;
+        setState(() => _goals.insert(0, g));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Meta creada')));
+      } catch (e) {
+        // Show user-friendly message for validation errors
+        final msg = e is Exception ? e.toString().replaceFirst('Exception: ', '') : 'Error al crear la meta';
+        if (!mounted) return;
+        // fallback: show the local instance only if it doesn't violate limits
+        setState(() => _goals.insert(0, newGoal));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      }
     }
   }
 
@@ -57,7 +128,7 @@ class _GoalsScreenState extends State<GoalsScreen> {
         children: [
           Row(
             children: [
-              CircleAvatar(backgroundColor: Colors.deepOrange.shade800.withOpacity(0.2), child: Icon(g.icon, color: Colors.yellow[700])),
+              CircleAvatar(backgroundColor: Colors.deepOrange.shade800.withAlpha((0.2 * 255).round()), child: Icon(g.icon, color: Colors.yellow[700])),
               const SizedBox(width: 12),
               Expanded(child: Text(g.title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16))),
               Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), decoration: BoxDecoration(color: Colors.black26, borderRadius: BorderRadius.circular(20)), child: Text('${g.progressPercent}%', style: const TextStyle(color: Colors.yellow))),
@@ -69,14 +140,208 @@ class _GoalsScreenState extends State<GoalsScreen> {
             child: LinearProgressIndicator(value: (g.target == 0) ? 0 : g.saved / g.target, minHeight: 10, backgroundColor: Colors.white12, valueColor: AlwaysStoppedAnimation<Color>(Colors.green)),
           ),
           const SizedBox(height: 8),
-          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text('\$${g.saved.toStringAsFixed(0)} / \$${g.target.toStringAsFixed(0)}', style: const TextStyle(color: Colors.white70)), Text(g.deadline == null ? '' : _deadlineLabel(g.deadline!), style: const TextStyle(color: Colors.yellow))]),
+          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text('${fmtMoneyOrPlaceholder(g.saved)} / ${fmtMoneyOrPlaceholder(g.target)}', style: const TextStyle(color: Colors.white70)), Text(g.deadline == null ? '' : _deadlineLabel(g.deadline!), style: const TextStyle(color: Colors.yellow))]),
           const SizedBox(height: 12),
           Row(children: [
-            ElevatedButton(onPressed: () {}, style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.black), child: const Text('Aportar')),
+            ElevatedButton(onPressed: () => _onContribute(g), style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.black), child: const Text('Aportar')),
             const SizedBox(width: 8),
-            OutlinedButton(onPressed: () {}, style: OutlinedButton.styleFrom(foregroundColor: Colors.white), child: const Text('Ver detalles')),
+            OutlinedButton(onPressed: () => _showDetails(g), style: OutlinedButton.styleFrom(foregroundColor: Colors.white), child: const Text('Ver detalles')),
           ])
         ],
+      ),
+    );
+  }
+
+  Future<void> _onContribute(Goal g) async {
+    final ctrl = TextEditingController();
+    final res = await showDialog<double?>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Aportar a la meta'),
+        content: TextField(controller: ctrl, keyboardType: TextInputType.number, decoration: const InputDecoration(hintText: 'Cantidad a aportar')),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(null), child: const Text('Cancelar')),
+          ElevatedButton(onPressed: () {
+            final v = double.tryParse(ctrl.text.replaceAll(',', '')) ?? 0.0;
+            Navigator.of(ctx).pop(v);
+          }, child: const Text('Aportar')),
+        ],
+      ),
+    );
+
+    if (res == null || res <= 0) return;
+
+    // Ensure the goal has an identifier in local DB. If both clientId and serverId are missing
+    // persist the goal via Repository.createGoal to generate a clientId and enqueue sync.
+    String? idToUse = g.clientId ?? g.serverId;
+    if (idToUse == null) {
+      final rec = await Repository().createGoal(g.toRecord());
+      final created = Map<String, dynamic>.from(rec);
+      final createdGoal = Goal.fromMap(created);
+      // replace the UI instance with the canonical one
+      if (!mounted) return;
+      setState(() {
+        final idx = _goals.indexOf(g);
+        if (idx >= 0) _goals[idx] = createdGoal;
+      });
+      idToUse = created['clientId'] as String? ?? created['serverId'] as String?;
+      // update g reference to the updated goal for optimistic UI
+      g = _goals.firstWhere((x) => x.clientId == idToUse || x.serverId == idToUse, orElse: () => g);
+    }
+
+    // optimistic update
+    setState(() => g.saved += res);
+
+    try {
+      // repository will look up by clientId or serverId
+      final resp = await Repository().contributeToGoal(idToUse!, res);
+      final updated = Map<String, dynamic>.from(resp);
+      final updatedGoal = Goal.fromMap(updated);
+      if (!mounted) return;
+      setState(() {
+        final idx = _goals.indexWhere((x) => x.clientId == updatedGoal.clientId || x.serverId == updatedGoal.serverId);
+        if (idx >= 0) _goals[idx] = updatedGoal;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Aporte registrado')));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Aporte guardado localmente (sincronización pendiente)')));
+    }
+  }
+
+  Future<void> _showDetails(Goal g) async {
+    // Fetch contributions for this goal
+    final goalClientId = g.clientId;
+    final contributions = <Map<String, dynamic>>[];
+    double separatedForGoal = 0.0;
+    if (goalClientId != null) {
+      try {
+        final rows = await Repository().getContributionsForGoal(goalClientId);
+        contributions.addAll(rows);
+        separatedForGoal = await Repository().getSeparatedForGoal(goalClientId);
+      } catch (_) {}
+    }
+
+    if (!mounted) return;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        margin: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(color: const Color(0xFF1A1A1A), borderRadius: BorderRadius.circular(12)),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Expanded(child: Text(g.title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18))),
+            Text(fmtMoneyOrPlaceholder(g.saved), style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+          ]),
+          const SizedBox(height: 8),
+          Row(children: [Text('Separado: ', style: const TextStyle(color: Colors.white70)), Text(fmtMoneyOrPlaceholder(separatedForGoal), style: const TextStyle(color: Colors.white))]),
+          const SizedBox(height: 8),
+          Row(children: [Text('Objetivo: ', style: const TextStyle(color: Colors.white70)), Text(fmtMoneyOrPlaceholder(g.target), style: const TextStyle(color: Colors.white))]),
+          const SizedBox(height: 6),
+          if (g.deadline != null) Text('Fecha límite: ${g.deadline!.day}/${g.deadline!.month}/${g.deadline!.year}', style: const TextStyle(color: Colors.white70)),
+          const SizedBox(height: 12),
+          const Text('Historial de aportes', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          if (contributions.isEmpty)
+            Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: const Color(0xFF0D0D0D), borderRadius: BorderRadius.circular(8)), child: Center(child: Text('No hay aportes todavía', style: TextStyle(color: Colors.white54))))
+          else
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 200),
+              child: ListView.separated(
+                shrinkWrap: true,
+                itemCount: contributions.length,
+                separatorBuilder: (_, __) => const Divider(color: Colors.white12),
+                itemBuilder: (ctx2, i) {
+                  final r = contributions[i];
+                  final amt = (r['amount'] as num?)?.toDouble() ?? 0.0;
+                  String dateLabel = '';
+                  try {
+                    final d = DateTime.parse(r['createdAt'] as String);
+                    dateLabel = '${d.day}/${d.month}/${d.year} ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+                  } catch (_) {
+                    dateLabel = r['createdAt']?.toString() ?? '';
+                  }
+                  return ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(fmtMoneyOrPlaceholder(amt), style: const TextStyle(color: Colors.white)),
+                    subtitle: Text(dateLabel, style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                    trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.white24),
+                  );
+                },
+              ),
+            ),
+          const SizedBox(height: 12),
+          Row(children: [Expanded(child: OutlinedButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cerrar'))), const SizedBox(width: 8), OutlinedButton(
+            style: OutlinedButton.styleFrom(foregroundColor: Colors.redAccent),
+            onPressed: () async {
+              final confirmed = await showDialog<bool>(
+                context: ctx,
+                builder: (confirmCtx) => AlertDialog(
+                  title: const Text('Eliminar meta'),
+                  content: const Text('¿Seguro que desea eliminar la meta?'),
+                  actions: [TextButton(onPressed: () => Navigator.of(confirmCtx).pop(false), child: const Text('Cancelar')), ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.red), onPressed: () => Navigator.of(confirmCtx).pop(true), child: const Text('Eliminar'))],
+                ),
+              );
+              if (confirmed == true) {
+                try {
+                  final idToUse = g.clientId ?? g.serverId;
+                  if (idToUse == null) throw Exception('Meta sin identificador');
+
+                  // compute separated amount for this goal to show in confirmation/undo
+                  double separatedForGoal = 0.0;
+                  try {
+                    if (g.clientId != null) {
+                      separatedForGoal = await Repository().getSeparatedForGoal(g.clientId!);
+                    } else if (g.serverId != null) {
+                      // best-effort: try to find clientId by scanning local goals
+                      final all = await Repository().getLocalGoals();
+                      final found = all.firstWhere((x) => (x['serverId'] as String?) == g.serverId, orElse: () => {});
+                      final fid = found['clientId'] as String?;
+                      if (fid != null) separatedForGoal = await Repository().getSeparatedForGoal(fid);
+                    }
+                  } catch (_) {}
+
+                  final delCtx = await Repository().deleteGoal(idToUse);
+                  if (!mounted) return;
+                  setState(() => _goals.removeWhere((x) => x.clientId == g.clientId || x.serverId == g.serverId));
+                  Navigator.of(context).pop();
+
+                  final messenger = ScaffoldMessenger.of(context);
+                  messenger.showSnackBar(SnackBar(
+                    content: Text('Meta eliminada — Separado eliminado: ${fmtMoneyOrPlaceholder(separatedForGoal)}'),
+                    action: SnackBarAction(
+                      label: 'Deshacer',
+                      onPressed: () async {
+                        try {
+                          await Repository().undoDeleteGoal(delCtx['goal'] as Map<String, dynamic>?, List<Map<String, dynamic>>.from(delCtx['contributions'] ?? []), List<String>.from(delCtx['queuedClientIds'] ?? []));
+                          if (!mounted) return;
+                          // restore to UI
+                          final restored = delCtx['goal'] as Map<String, dynamic>?;
+                          if (restored != null) {
+                            setState(() {
+                              _goals.insert(0, Goal.fromMap(restored));
+                            });
+                          }
+                          messenger.showSnackBar(const SnackBar(content: Text('Meta restaurada')));
+                        } catch (e) {
+                          messenger.showSnackBar(SnackBar(content: Text('No se pudo restaurar: ${e.toString()}')));
+                        }
+                      },
+                    ),
+                  ));
+                } catch (e) {
+                  if (!mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error al eliminar: ${e.toString()}')));
+                }
+              }
+            },
+            child: const Text('Eliminar'),
+          )]),
+        ]),
       ),
     );
   }
@@ -119,7 +384,17 @@ class _GoalsScreenState extends State<GoalsScreen> {
 
             const SizedBox(height: 18),
 
-            ..._goals.map(_goalCard).toList(),
+            if (_goals.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(color: const Color(0xFF1A1A1A), borderRadius: BorderRadius.circular(12)),
+                  child: Center(child: Text('No tienes metas todavía', style: TextStyle(color: Colors.white54))),
+                ),
+              )
+            else
+              ..._goals.map(_goalCard),
 
             const SizedBox(height: 40),
             // Encouragement card

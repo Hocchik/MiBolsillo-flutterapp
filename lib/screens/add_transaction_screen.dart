@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import '../services/repository.dart';
 
 enum TxType { income, expense }
 
 class AddTransactionScreen extends StatefulWidget {
+  const AddTransactionScreen({super.key});
+
   @override
   State<AddTransactionScreen> createState() => _AddTransactionScreenState();
 }
@@ -13,7 +16,9 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
   final TextEditingController _amountCtrl = TextEditingController(text: '0');
   final List<int> _quickAmounts = [100, 500, 1000, 2000, 5000];
   String? _selectedCategory;
-  final List<String> _categories = ['Salario', 'Freelance', 'Inversiones', 'Regalo', 'Otros'];
+  final List<String> _incomeCategories = ['Salario', 'Freelance', 'Inversiones', 'Regalo', 'Otros'];
+  final List<String> _expenseCategories = ['Comida', 'Transporte', 'Servicios', 'Entretenimiento', 'Salud', 'Otros'];
+  List<String> get _categories => _type == TxType.expense ? _expenseCategories : _incomeCategories;
   final TextEditingController _noteCtrl = TextEditingController();
 
   @override
@@ -64,8 +69,29 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       'date': DateTime.now().toIso8601String(),
     };
 
-    // Por ahora retornamos la transacción al pop para que puedas probarla desde el caller
-    Navigator.pop(context, tx);
+    // Use Repository to persist locally and attempt immediate sync.
+    _sendToServerOrReturnLocal(tx);
+  }
+
+  Future<void> _sendToServerOrReturnLocal(Map<String, dynamic> tx) async {
+    // Ensure timestamps are present; Repository will generate clientId
+    tx['createdAt'] = tx['date'] ?? DateTime.now().toIso8601String();
+    tx['updatedAt'] = DateTime.now().toIso8601String();
+
+    try {
+      final resp = await Repository().createTransaction(tx);
+      if (!mounted) return;
+  if (resp['serverId'] != null) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Transacción sincronizada')));
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Transacción guardada localmente')));
+      }
+      Navigator.pop(context, resp);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Error al guardar la transacción')));
+      Navigator.pop(context, tx);
+    }
   }
 
   Widget _buildStepIndicator() {
@@ -134,7 +160,10 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
         Text('¿Qué tipo de transacción es?', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
         SizedBox(height: 12),
         GestureDetector(
-          onTap: () => setState(() => _type = TxType.income),
+              onTap: () => setState(() {
+                _type = TxType.income;
+                _selectedCategory = null;
+              }),
           child: AnimatedContainer(
             duration: Duration(milliseconds: 200),
             padding: EdgeInsets.all(14),
@@ -152,7 +181,10 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
         ),
         SizedBox(height: 12),
         GestureDetector(
-          onTap: () => setState(() => _type = TxType.expense),
+          onTap: () => setState(() {
+            _type = TxType.expense;
+            _selectedCategory = null;
+          }),
           child: AnimatedContainer(
             duration: Duration(milliseconds: 200),
             padding: EdgeInsets.all(14),
@@ -175,16 +207,17 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
   }
 
   Widget _buildStepAmount() {
+    final title = _type == TxType.expense ? '¿Cuánto gastaste?' : '¿Cuánto recibiste?';
     return Column(
       children: [
-        Text('¿Cuánto recibiste?', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+        Text(title, style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
         SizedBox(height: 12),
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Text('\$', style: TextStyle(color: Colors.white, fontSize: 28)),
             SizedBox(width: 8),
-            Container(
+            SizedBox(
               width: 120,
               child: TextField(
                 controller: _amountCtrl,
@@ -203,7 +236,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
           return OutlinedButton(
             onPressed: () => setState(() => _amountCtrl.text = v.toString()),
             style: OutlinedButton.styleFrom(side: BorderSide(color: Colors.white24), backgroundColor: Color(0xFF121212)),
-            child: Text('\$${v}'),
+            child: Text('\$$v'),
           );
         }).toList()),
         SizedBox(height: 16),
