@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/repository.dart';
+import '../services/currency_service.dart';
 
 enum TxType { income, expense }
 
@@ -12,6 +13,7 @@ class AddTransactionScreen extends StatefulWidget {
 
 class _AddTransactionScreenState extends State<AddTransactionScreen> {
   int _step = 0;
+  bool _saving = false;
   TxType? _type;
   final TextEditingController _amountCtrl = TextEditingController(text: '0');
   final List<int> _quickAmounts = [100, 500, 1000, 2000, 5000];
@@ -56,11 +58,15 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
   }
 
   void _save() {
+    if (_saving) return;
     if (_selectedCategory == null) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Selecciona una categoría')));
       return;
     }
-    final amount = double.tryParse(_amountCtrl.text.replaceAll(',', '').trim()) ?? 0;
+    // Parse the entered amount in the currently selected currency and convert
+    // it to the app base currency (USD) for storage.
+    final parsed = double.tryParse(_amountCtrl.text.replaceAll(',', '').trim()) ?? 0;
+    final amount = CurrencyService().convertToBase(parsed);
     final tx = {
       'type': _type == TxType.income ? 'income' : 'expense',
       'amount': amount,
@@ -77,20 +83,37 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     // Ensure timestamps are present; Repository will generate clientId
     tx['createdAt'] = tx['date'] ?? DateTime.now().toIso8601String();
     tx['updatedAt'] = DateTime.now().toIso8601String();
+    if (!mounted) return;
+    setState(() => _saving = true);
+    final messenger = ScaffoldMessenger.of(context);
+    // show an indefinite saving snackbar while the operation runs
+    messenger.showSnackBar(SnackBar(
+      duration: const Duration(days: 1),
+      content: Row(children: const [SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)), SizedBox(width: 12), Text('Guardando...')]),
+    ));
 
     try {
       final resp = await Repository().createTransaction(tx);
       if (!mounted) return;
-  if (resp['serverId'] != null) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Transacción sincronizada')));
+      messenger.hideCurrentSnackBar();
+      if (resp['serverId'] != null) {
+        messenger.showSnackBar(const SnackBar(content: Text('Transacción sincronizada')));
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Transacción guardada localmente')));
+        messenger.showSnackBar(const SnackBar(content: Text('Transacción guardada localmente')));
       }
+      // small delay so user sees the success message, then return
+      await Future.delayed(const Duration(milliseconds: 600));
+      if (!mounted) return;
       Navigator.pop(context, resp);
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Error al guardar la transacción')));
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(const SnackBar(content: Text('Error al guardar la transacción')));
+      await Future.delayed(const Duration(milliseconds: 600));
+      if (!mounted) return;
       Navigator.pop(context, tx);
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
   }
 
@@ -215,7 +238,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text('\$', style: TextStyle(color: Colors.white, fontSize: 28)),
+            Text(CurrencyService().symbols[CurrencyService().selectedCurrency] ?? '\$', style: TextStyle(color: Colors.white, fontSize: 28)),
             SizedBox(width: 8),
             SizedBox(
               width: 120,
@@ -233,14 +256,15 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
         Align(alignment: Alignment.centerLeft, child: Text('Cantidades rápidas', style: TextStyle(color: Colors.white70))),
         SizedBox(height: 8),
         Wrap(spacing: 8, children: _quickAmounts.map((v) {
+          final sym = CurrencyService().symbols[CurrencyService().selectedCurrency] ?? '\$';
           return OutlinedButton(
             onPressed: () => setState(() => _amountCtrl.text = v.toString()),
             style: OutlinedButton.styleFrom(side: BorderSide(color: Colors.white24), backgroundColor: Color(0xFF121212)),
-            child: Text('\$$v'),
+            child: Text('$sym$v'),
           );
         }).toList()),
         SizedBox(height: 16),
-        Row(children: [Expanded(child: OutlinedButton(onPressed: _back, child: Text('Atrás', style: TextStyle(color: Colors.white)))), SizedBox(width: 12), Expanded(child: ElevatedButton(onPressed: _next, style: ElevatedButton.styleFrom(backgroundColor: Color(0xFF9AEF5E), foregroundColor: Colors.black), child: Text('Continuar')))],),
+            Row(children: [Expanded(child: OutlinedButton(onPressed: _back, child: Text('Atrás', style: TextStyle(color: Colors.white)))), SizedBox(width: 12), Expanded(child: ElevatedButton(onPressed: _saving ? null : _next, style: ElevatedButton.styleFrom(backgroundColor: Color(0xFF9AEF5E), foregroundColor: Colors.black), child: _saving ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2)) : Text('Continuar')))],),
       ],
     );
   }
@@ -267,7 +291,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
         SizedBox(height: 8),
         TextField(controller: _noteCtrl, style: TextStyle(color: Colors.white), decoration: InputDecoration(hintText: 'Agrega una nota...', hintStyle: TextStyle(color: Colors.white24), filled: true, fillColor: Color(0xFF0E0E0E), border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none))),
         SizedBox(height: 16),
-        Row(children: [Expanded(child: OutlinedButton(onPressed: _back, child: Text('Atrás', style: TextStyle(color: Colors.white)))), SizedBox(width: 12), Expanded(child: ElevatedButton(onPressed: _save, style: ElevatedButton.styleFrom(backgroundColor: Color(0xFF9AEF5E), foregroundColor: Colors.black), child: Text('Guardar')))],),
+        Row(children: [Expanded(child: OutlinedButton(onPressed: _back, child: Text('Atrás', style: TextStyle(color: Colors.white)))), SizedBox(width: 12), Expanded(child: ElevatedButton(onPressed: _saving ? null : _save, style: ElevatedButton.styleFrom(backgroundColor: Color(0xFF9AEF5E), foregroundColor: Colors.black), child: _saving ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2)) : Text('Guardar')))],),
       ],
     );
   }

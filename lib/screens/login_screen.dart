@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../widgets/gradient_button.dart';
 import '../services/app_config.dart';
 import '../services/auth_service.dart';
+import '../services/repository.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -41,6 +42,10 @@ class _LoginScreenState extends State<LoginScreen> {
       await auth.setLoggedIn(true);
       await auth.setUsername(username.contains('@') ? username.split('@')[0] : username);
       await auth.setSynced(true);
+      // After login, attempt to push any locally created offline data to server
+      try {
+        await Repository().trySyncNow();
+      } catch (_) {}
     } catch (e) {
       // Mostrar error
       final err = e.toString();

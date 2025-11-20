@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../widgets/gradient_button.dart';
-import '../services/app_config.dart';
 import '../services/auth_service.dart';
+import '../services/repository.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -28,12 +28,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _loading = true);
-    final api = AppConfig.apiInstance();
     try {
       final name = _nameCtrl.text.trim();
       final email = _emailCtrl.text.trim();
       final password = _passCtrl.text;
-      final resp = await api.register(email, password);
+      // Use repository helper to include local clientChanges at registration
+      final resp = await Repository().registerWithLocalChanges(email, password);
       final token = resp['token'] as String?;
       if (token == null) throw Exception('Token no recibido');
 

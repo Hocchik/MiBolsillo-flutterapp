@@ -1,3 +1,5 @@
+import 'dart:convert';
+import 'dart:async';
 import 'package:uuid/uuid.dart';
 
 import 'app_config.dart';
@@ -22,6 +24,121 @@ class Repository {
     SyncManager().start();
   }
 
+  /// Attempt to push pending changes to server immediately (best-effort).
+  /// Called after login/registration so locally-created offline data is claimed
+  /// by the authenticated user. Safe to call when offline; will fail silently.
+  Future<void> trySyncNow() async {
+    final api = AppConfig.apiInstance();
+    try {
+      final pending = await _db.getPendingChanges();
+      if (pending.isEmpty) return;
+      final clientChanges = pending.map((p) {
+        final record = p['record'] == null ? null : (p['record'] is String ? jsonDecode(p['record'] as String) : p['record']);
+        return {'clientId': p['clientId'], 'op': p['op'], 'entity': p['entity'] ?? 'transactions', 'record': record};
+      }).toList();
+
+      final res = await api.postSync({'clientChanges': clientChanges});
+
+      // process accepted
+      final accepted = (res['accepted'] as List<dynamic>?) ?? [];
+      final acceptedClientIds = <String>{};
+      for (final a in accepted) {
+        final clientId = a['clientId'] as String?;
+        final serverId = a['serverId'] as String?;
+        final status = a['status'] as String?;
+        if (status == 'ok' && clientId != null && serverId != null) {
+          acceptedClientIds.add(clientId);
+          await _db.updateLocalRecordServerId('transactions', clientId, serverId).catchError((_) {});
+          await _db.updateLocalRecordServerId('goals', clientId, serverId).catchError((_) {});
+        }
+      }
+
+      // remove processed items
+      for (final p in pending) {
+        final cid = p['clientId'] as String?;
+        if (cid != null && acceptedClientIds.contains(cid)) {
+          await _db.removePendingChangeById(p['id'] as int);
+        }
+      }
+
+      // apply server changes
+      final serverChanges = (res['serverChanges'] as List<dynamic>?) ?? [];
+      for (final sc in serverChanges) {
+        try {
+          final entity = sc['entity'] as String? ?? 'transactions';
+          final row = sc['row'] as Map<String, dynamic>? ?? sc as Map<String, dynamic>;
+          await _db.applyServerChange(entity, row);
+        } catch (_) {}
+      }
+
+      // persist conflicts
+      final conflicts = (res['conflicts'] as List<dynamic>?) ?? [];
+      for (final c in conflicts) {
+        try {
+          final clientId = c['clientId'] as String? ?? c['record']?['clientId'] as String? ?? '';
+          final entity = c['entity'] as String? ?? 'transactions';
+          final localRec = c['local'] as Map<String, dynamic>? ?? c['record'] as Map<String, dynamic>?;
+          final serverRec = c['server'] as Map<String, dynamic>?;
+          final reason = c['reason'] as String?;
+          await _db.addConflict(clientId, entity, localRec, serverRec, reason);
+        } catch (_) {}
+      }
+    } catch (_) {
+      // ignore — will be retried by SyncManager on connectivity changes
+    }
+  }
+
+  /// Register using local client changes so the server can migrate/claim them
+  /// into the newly-created user account. Returns whatever the API returned
+  /// (typically includes an auth token). Best-effort: on success, process
+  /// accepted/serverChanges similarly to `trySyncNow`.
+  Future<Map<String, dynamic>> registerWithLocalChanges(String username, String password) async {
+    final api = AppConfig.apiInstance();
+    final pending = await _db.getPendingChanges();
+    final clientChanges = pending.map((p) => {
+          'clientId': p['clientId'],
+          'op': p['op'],
+          'entity': p['entity'] ?? 'transactions',
+          'record': p['record'] == null ? null : (p['record'] is String ? jsonDecode(p['record'] as String) : p['record'])
+        }).toList();
+
+    final res = await api.registerWithClientChanges(username, password, clientChanges: clientChanges);
+
+    // Process possible sync information returned by registration (best-effort)
+    try {
+      final accepted = (res['accepted'] as List<dynamic>?) ?? [];
+      final acceptedClientIds = <String>{};
+      for (final a in accepted) {
+        final clientId = a['clientId'] as String?;
+        final serverId = a['serverId'] as String?;
+        final status = a['status'] as String?;
+        if (status == 'ok' && clientId != null && serverId != null) {
+          acceptedClientIds.add(clientId);
+          await _db.updateLocalRecordServerId('transactions', clientId, serverId).catchError((_) {});
+          await _db.updateLocalRecordServerId('goals', clientId, serverId).catchError((_) {});
+        }
+      }
+      final pendingNow = await _db.getPendingChanges();
+      for (final p in pendingNow) {
+        final cid = p['clientId'] as String?;
+        if (cid != null && acceptedClientIds.contains(cid)) {
+          await _db.removePendingChangeById(p['id'] as int);
+        }
+      }
+
+      final serverChanges = (res['serverChanges'] as List<dynamic>?) ?? [];
+      for (final sc in serverChanges) {
+        try {
+          final entity = sc['entity'] as String? ?? 'transactions';
+          final row = sc['row'] as Map<String, dynamic>? ?? sc as Map<String, dynamic>;
+          await _db.applyServerChange(entity, row);
+        } catch (_) {}
+      }
+    } catch (_) {}
+
+    return res;
+  }
+
   Future<Map<String, dynamic>> createTransaction(Map<String, dynamic> tx) async {
     final clientId = 'c_tx_${_uuid.v4()}';
     final now = DateTime.now().toIso8601String();
@@ -44,15 +161,75 @@ class Repository {
 
     // Try immediate server send, but don't fail if offline
     try {
-      final resp = await _api.postTransaction(record);
+      // avoid blocking UI indefinitely — use a short timeout for immediate attempts
+      final resp = await _api.postTransaction(record).timeout(const Duration(seconds: 6));
       // Update local row with serverId if returned
       if (resp['serverId'] != null) {
         await _db.updateLocalRecordServerId('transactions', clientId, resp['serverId']);
       }
       return resp;
+    } on TimeoutException catch (_) {
+      // network took too long — return local record as fallback
+      return record;
     } catch (_) {
       // Return the local record as fallback
       return record;
+    }
+  }
+
+  /// Delete (soft) a transaction by clientId or serverId. Returns context with
+  /// original transaction and queued clientIds so UI can offer undo.
+  Future<Map<String, dynamic>> deleteTransaction(String id) async {
+    // try clientId then serverId
+    final db = _db;
+    var rows = await db.getTransactions();
+    Map<String, dynamic>? found;
+    for (final r in rows) {
+      if (r['clientId'] == id || r['serverId'] == id) {
+        found = Map<String, dynamic>.from(r);
+        break;
+      }
+    }
+    if (found == null) throw Exception('Transacción no encontrada');
+
+    final clientId = found['clientId'] as String?;
+    final serverId = found['serverId'] as String?;
+    final List<String> queued = [];
+
+    if (clientId != null) {
+      await _db.deleteTransactionLocalByClientId(clientId);
+      await _db.addSyncChange(clientId, 'delete', 'transactions', {'clientId': clientId});
+      queued.add(clientId);
+    } else if (serverId != null) {
+      await _db.deleteTransactionLocalByServerId(serverId);
+      final pseudo = 's_tx_$serverId';
+      await _db.addSyncChange(pseudo, 'delete', 'transactions', {'serverId': serverId});
+      queued.add(pseudo);
+    }
+
+    // best-effort server delete
+    try {
+      if (serverId != null && serverId.isNotEmpty) {
+        await _api.deleteTransaction(serverId);
+      }
+    } catch (_) {}
+
+    return {'transaction': found, 'queuedClientIds': queued};
+  }
+
+  /// Undo a previously deleted transaction using the provided originalRecord
+  /// and queued clientIds that were added to the sync queue.
+  Future<void> undoDeleteTransaction(Map<String, dynamic>? original, List<String> queuedClientIds) async {
+    if (original != null) {
+      final restored = Map<String, dynamic>.from(original);
+      restored['deleted'] = 0;
+      restored['updatedAt'] = DateTime.now().toIso8601String();
+      await _db.insertTransactionLocal(restored);
+    }
+    for (final cid in queuedClientIds) {
+      try {
+        await _db.removePendingChangesByClientId(cid);
+      } catch (_) {}
     }
   }
 
@@ -84,11 +261,13 @@ class Repository {
     await _db.addSyncChange(clientId, 'create', 'goals', record);
 
     try {
-      final resp = await _api.postGoal(record);
+      final resp = await _api.postGoal(record).timeout(const Duration(seconds: 6));
       if (resp['serverId'] != null) {
         await _db.updateLocalRecordServerId('goals', clientId, resp['serverId']);
       }
       return resp;
+    } on TimeoutException catch (_) {
+      return record;
     } catch (_) {
       return record;
     }
@@ -249,19 +428,21 @@ class Repository {
     await _db.addSyncChange(local['clientId'] as String, 'update', 'goals', updated);
 
     // Try immediate server update for goal if we have serverId (best-effort)
-    try {
-      final serverId = updated['serverId'] as String?;
-      if (serverId != null && serverId.isNotEmpty) {
-        final resp = await _api.putGoal(serverId, updated);
-        if (resp['serverId'] != null) {
-          await _db.updateLocalRecordServerId('goals', local['clientId'] as String, resp['serverId'] as String);
+      try {
+        final serverId = updated['serverId'] as String?;
+        if (serverId != null && serverId.isNotEmpty) {
+          final resp = await _api.putGoal(serverId, updated).timeout(const Duration(seconds: 6));
+          if (resp['serverId'] != null) {
+            await _db.updateLocalRecordServerId('goals', local['clientId'] as String, resp['serverId'] as String);
+          }
+          // Note: we don't attempt to POST contribution to server here because there's no endpoint yet.
+          return resp;
         }
-        // Note: we don't attempt to POST contribution to server here because there's no endpoint yet.
-        return resp;
+      } on TimeoutException catch (_) {
+        // ignore timeout — SyncManager will process queue
+      } catch (_) {
+        // ignore network errors — SyncManager will process queue
       }
-    } catch (_) {
-      // ignore network errors — SyncManager will process queue
-    }
 
     return updated;
   }
@@ -328,6 +509,71 @@ class Repository {
       coachSummary = 'Atención — intenta reducir gastos o aumentar ingresos.';
     }
 
+    // Additional rule-based coach analysis over last 30 days
+    // Analyze expense by category, by day, and by hour to produce simple suggestions
+    final Map<String, double> expenseByCategory = {};
+    final Map<String, double> expenseByDay = {}; // key: yyyy-mm-dd
+    final Map<int, double> expenseByHour = {}; // 0-23
+    for (final t in last30) {
+      try {
+        final d = DateTime.parse(t['createdAt'] as String);
+        final dayKey = '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+        final amt = (t['amount'] as num?)?.toDouble() ?? 0.0;
+        if (t['type'] != 'income') {
+          final cat = (t['category'] as String?) ?? (t['note'] as String?) ?? 'Otros';
+          expenseByCategory[cat] = (expenseByCategory[cat] ?? 0.0) + amt;
+          expenseByDay[dayKey] = (expenseByDay[dayKey] ?? 0.0) + amt;
+          expenseByHour[d.hour] = (expenseByHour[d.hour] ?? 0.0) + amt;
+        }
+      } catch (_) {}
+    }
+
+    // top category
+    String? topCategory;
+    double topCategoryAmount = 0.0;
+    if (expenseByCategory.isNotEmpty) {
+      final sortedCats = expenseByCategory.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+      topCategory = sortedCats.first.key;
+      topCategoryAmount = sortedCats.first.value;
+    }
+
+    // avg daily expense over the window (use full 30 days to smooth spikes)
+    final totalExpenseLast30 = expenseByDay.values.fold(0.0, (p, e) => p + e);
+    final avgDailyExpense = totalExpenseLast30 / 30.0;
+
+    // count high spending days (e.g., days with expense > 1.5x average)
+    final highSpendingDays = expenseByDay.values.where((v) => v > avgDailyExpense * 1.5).length;
+
+    // peak hour
+    int? peakHour;
+    
+    if (expenseByHour.isNotEmpty) {
+      final sortedHours = expenseByHour.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+      peakHour = sortedHours.first.key;
+    }
+
+    // build human-readable recommendations (rule-based)
+    final List<String> recommendations = [];
+    if (savingsRate < 0.05) {
+      recommendations.add('Tu tasa de ahorro es baja (${(savingsRate * 100).toStringAsFixed(0)}%). Considera recortar gastos fijos y ahorrar al menos 5-10% de tus ingresos.');
+    } else if (savingsRate < 0.15) {
+      recommendations.add('Buen inicio — intenta aumentar tu ahorro al menos al 15% de tus ingresos.');
+    } else {
+      recommendations.add('Estás ahorrando de manera consistente — mantén el buen trabajo.');
+    }
+    if (topCategory != null) {
+      recommendations.add('Revisa tus gastos en "$topCategory" — fue la categoría con mayor gasto en los últimos 30 días (\$${topCategoryAmount.toStringAsFixed(2)}).');
+    }
+    if (highSpendingDays >= 3) {
+      recommendations.add('Detectamos $highSpendingDays días con gasto superior a 1.5× el promedio diario. Revisa compras puntuales o suscripciones.');
+    }
+    if (peakHour != null) {
+      recommendations.add('Sueles gastar más alrededor de las ${peakHour.toString().padLeft(2, '0')}:00 — considera evitar compras impulsivas en esa franja.');
+    }
+    if (totalExpenseLast30 == 0) {
+      recommendations.add('No hay gastos registrados en los últimos 30 días. Registra tus transacciones para obtener mejores recomendaciones.');
+    }
+
     return {
       'income': income,
       'expense': expense,
@@ -341,6 +587,14 @@ class Repository {
       'savingsRate': savingsRate,
       'savingsRateIncludingSeparated': savingsRateIncludingSeparated,
       'coachSummary': coachSummary,
+      'coach': {
+        'summary': coachSummary,
+        'recommendations': recommendations,
+        'topCategory': topCategory,
+        'avgDailyExpense': avgDailyExpense,
+        'highSpendingDays': highSpendingDays,
+        'peakHour': peakHour,
+      },
     };
   }
 }

@@ -414,6 +414,20 @@ class LocalDb {
     return await db.update('goals', {'deleted': 1, 'updatedAt': now}, where: 'clientId = ?', whereArgs: [clientId]);
   }
 
+  Future<int> deleteTransactionLocalByClientId(String clientId) async {
+    await init();
+    final db = _db!;
+    final now = DateTime.now().toIso8601String();
+    return await db.update('transactions', {'deleted': 1, 'updatedAt': now}, where: 'clientId = ?', whereArgs: [clientId]);
+  }
+
+  Future<int> deleteTransactionLocalByServerId(String serverId) async {
+    await init();
+    final db = _db!;
+    final now = DateTime.now().toIso8601String();
+    return await db.update('transactions', {'deleted': 1, 'updatedAt': now}, where: 'serverId = ?', whereArgs: [serverId]);
+  }
+
   Future<int> deleteGoalLocalByServerId(String serverId) async {
     await init();
     final db = _db!;

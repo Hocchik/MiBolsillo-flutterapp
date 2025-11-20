@@ -134,6 +134,16 @@ class ApiService {
     throw HttpException('Failed to delete goal', res.statusCode, res.body);
   }
 
+  Future<void> deleteTransaction(String serverId) async {
+    final url = _uri('/transactions/$serverId');
+    final headers = await _authHeaders();
+    final res = await http.delete(url, headers: headers);
+
+    if (res.statusCode == 204) return;
+
+    throw HttpException('Failed to delete transaction', res.statusCode, res.body);
+  }
+
   Future<Map<String, dynamic>> postSync(Map<String, dynamic> payload) async {
     final url = _uri('/sync');
     final headers = await _authHeaders();

@@ -223,15 +223,56 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
                   padding: const EdgeInsets.symmetric(horizontal: 16.0),
                   child: Container(
                     padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(gradient: const LinearGradient(colors: [Color(0xFF9AEF5E), Color(0xFF7BB32F)]), borderRadius: BorderRadius.circular(12)),
-                    child: const Column(
+                    decoration: BoxDecoration(color: cardBg, borderRadius: BorderRadius.circular(12)),
+                    child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Insights Financieros', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
-                        SizedBox(height: 8),
-                        Text('Tendencia Positiva - Tus ingresos han crecido 15% en los últimos 3 meses', style: TextStyle(color: Colors.black87)),
-                        SizedBox(height: 8),
-                        Text('Categoría Principal - Comida representa tu mayor gasto', style: TextStyle(color: Colors.black87)),
+                        const Text('Insights', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 8),
+                        // compact row of three small cards driven by chart data
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Container(
+                                padding: const EdgeInsets.all(10),
+                                margin: const EdgeInsets.only(right: 8),
+                                decoration: BoxDecoration(color: const Color(0xFF121212), borderRadius: BorderRadius.circular(8)),
+                                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                  const Text('Principal', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                                  const SizedBox(height: 6),
+                                  Text(_stats?['coach']?['topCategory'] as String? ?? '—', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                                ]),
+                              ),
+                            ),
+                            Expanded(
+                              child: Container(
+                                padding: const EdgeInsets.all(10),
+                                margin: const EdgeInsets.symmetric(horizontal: 4),
+                                decoration: BoxDecoration(color: const Color(0xFF121212), borderRadius: BorderRadius.circular(8)),
+                                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                  const Text('Promedio (30d)', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                                  const SizedBox(height: 6),
+                                  Text(fmtMoneyOrPlaceholder((_stats?['coach']?['avgDailyExpense'] as num?)?.toDouble()), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                                ]),
+                              ),
+                            ),
+                            Expanded(
+                              child: Container(
+                                padding: const EdgeInsets.all(10),
+                                margin: const EdgeInsets.only(left: 8),
+                                decoration: BoxDecoration(color: const Color(0xFF121212), borderRadius: BorderRadius.circular(8)),
+                                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                  const Text('Franja pico', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                                  const SizedBox(height: 6),
+                                  Text((_stats?['coach']?['peakHour'] != null) ? '${(_stats?['coach']?['peakHour'] as int).toString().padLeft(2, '0')}:00' : '—', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                                ]),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        // small explanation
+                        const Text('Información resumida basada en los gráficos. Para recomendaciones detalladas visita la pestaña Coach.', style: TextStyle(color: Colors.white54, fontSize: 12)),
                       ],
                     ),
                   ),
@@ -366,9 +407,16 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
 
   // Simple pie chart showing expense breakdown by category using CustomPainter
   Widget _pieChart() {
-    // Aggregate expenses by category
+    // Aggregate expenses by category for the last 30 days only
+    final cutoff = DateTime.now().subtract(const Duration(days: 30));
     final Map<String, double> sums = {};
     for (final t in _txs) {
+      try {
+        final d = DateTime.parse(t['createdAt'] as String);
+        if (d.isBefore(cutoff)) continue;
+      } catch (_) {
+        // ignore parse errors and include the tx
+      }
       if (t['type'] == 'income') continue;
       final cat = (t['category'] as String?) ?? (t['note'] as String?) ?? 'Otros';
       final amt = (t['amount'] as num?)?.toDouble() ?? 0.0;
@@ -410,8 +458,14 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
 
   // Build legend widgets for expenses (used under the pie chart)
   List<Widget> _buildExpenseLegend() {
+    // Build legend from expenses in the last 30 days only
+    final cutoff = DateTime.now().subtract(const Duration(days: 30));
     final Map<String, double> sums = {};
     for (final t in _txs) {
+      try {
+        final d = DateTime.parse(t['createdAt'] as String);
+        if (d.isBefore(cutoff)) continue;
+      } catch (_) {}
       if (t['type'] == 'income') continue;
       final cat = (t['category'] as String?) ?? (t['note'] as String?) ?? 'Otros';
       final amt = (t['amount'] as num?)?.toDouble() ?? 0.0;

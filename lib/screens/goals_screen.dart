@@ -98,6 +98,12 @@ class _GoalsScreenState extends State<GoalsScreen> {
         'extra': null,
       };
 
+      final messenger = ScaffoldMessenger.of(context);
+      messenger.showSnackBar(SnackBar(
+        duration: const Duration(days: 1),
+        content: Row(children: const [SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)), SizedBox(width: 12), Text('Creando meta...')]),
+      ));
+
       try {
         final resp = await Repository().createGoal(payload);
         // resp will be either server response or the local record
@@ -105,14 +111,16 @@ class _GoalsScreenState extends State<GoalsScreen> {
         final g = Goal.fromMap(record);
         if (!mounted) return;
         setState(() => _goals.insert(0, g));
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Meta creada')));
+        messenger.hideCurrentSnackBar();
+        messenger.showSnackBar(const SnackBar(content: Text('Meta creada')));
       } catch (e) {
         // Show user-friendly message for validation errors
         final msg = e is Exception ? e.toString().replaceFirst('Exception: ', '') : 'Error al crear la meta';
         if (!mounted) return;
         // fallback: show the local instance only if it doesn't violate limits
         setState(() => _goals.insert(0, newGoal));
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+        messenger.hideCurrentSnackBar();
+        messenger.showSnackBar(SnackBar(content: Text(msg)));
       }
     }
   }

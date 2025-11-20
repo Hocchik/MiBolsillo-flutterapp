@@ -66,6 +66,14 @@ class CurrencyService {
     return amountUsd * rate;
   }
 
+  /// Convert an amount expressed in the currently selected currency back to
+  /// the base currency (USD) used for storage.
+  double convertToBase(double amountInSelected) {
+    final rate = rates[selectedCurrency] ?? 1.0;
+    if (rate == 0) return amountInSelected;
+    return amountInSelected / rate;
+  }
+
   String format(double? amountUsd) {
     if (amountUsd == null) return '---';
     final converted = convertFromBase(amountUsd);
