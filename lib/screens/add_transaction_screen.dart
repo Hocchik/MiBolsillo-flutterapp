@@ -86,32 +86,41 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     if (!mounted) return;
     setState(() => _saving = true);
     final messenger = ScaffoldMessenger.of(context);
-    // show an indefinite saving snackbar while the operation runs
+    // show a saving snackbar while the operation runs; we'll auto-hide/redirect after a timeout
     messenger.showSnackBar(SnackBar(
-      duration: const Duration(days: 1),
+      duration: const Duration(seconds: 6),
       content: Row(children: const [SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)), SizedBox(width: 12), Text('Guardando...')]),
     ));
 
+    // fallback: if still saving after timeout, hide snackbar and navigate back with local tx
+    Future.delayed(const Duration(seconds: 6)).then((_) {
+      if (_saving && mounted) {
+        try {
+          messenger.hideCurrentSnackBar();
+          messenger.showSnackBar(const SnackBar(content: Text('Guardado localmente (sincronización pendiente)')));
+          if (mounted) Navigator.pop(context, tx);
+        } catch (_) {}
+      }
+    });
+
     try {
       final resp = await Repository().createTransaction(tx);
-      if (!mounted) return;
+      // always hide the 'Guardando...' snackbar even if widget unmounted
       messenger.hideCurrentSnackBar();
       if (resp['serverId'] != null) {
-        messenger.showSnackBar(const SnackBar(content: Text('Transacción sincronizada')));
+        if (mounted) messenger.showSnackBar(const SnackBar(content: Text('Transacción sincronizada')));
       } else {
-        messenger.showSnackBar(const SnackBar(content: Text('Transacción guardada localmente')));
+        if (mounted) messenger.showSnackBar(const SnackBar(content: Text('Transacción guardada localmente')));
       }
       // small delay so user sees the success message, then return
       await Future.delayed(const Duration(milliseconds: 600));
-      if (!mounted) return;
-      Navigator.pop(context, resp);
+      if (mounted) Navigator.pop(context, resp);
     } catch (_) {
-      if (!mounted) return;
+      // ensure snackbar is hidden even on error
       messenger.hideCurrentSnackBar();
-      messenger.showSnackBar(const SnackBar(content: Text('Error al guardar la transacción')));
+      if (mounted) messenger.showSnackBar(const SnackBar(content: Text('Error al guardar la transacción')));
       await Future.delayed(const Duration(milliseconds: 600));
-      if (!mounted) return;
-      Navigator.pop(context, tx);
+      if (mounted) Navigator.pop(context, tx);
     } finally {
       if (mounted) setState(() => _saving = false);
     }

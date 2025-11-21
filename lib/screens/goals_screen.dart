@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../widgets/shell_scaffold.dart';
 import '../utils/formatters.dart';
 import '../services/repository.dart';
+import '../services/currency_service.dart';
 
 class Goal {
   String? clientId;
@@ -61,6 +62,22 @@ class _GoalsScreenState extends State<GoalsScreen> {
   void initState() {
     super.initState();
     _loadGoals();
+    // Rebuild when selected currency or rates change so amounts reformat
+    CurrencyService().addListener(_onCurrencyChanged);
+    // Refresh when repository local data changes (new transaction/goal/contribution)
+    Repository().dataVersion.addListener(_loadGoals);
+  }
+
+  @override
+  void dispose() {
+    CurrencyService().removeListener(_onCurrencyChanged);
+    Repository().dataVersion.removeListener(_loadGoals);
+    super.dispose();
+  }
+
+  void _onCurrencyChanged() {
+    if (!mounted) return;
+    setState(() {});
   }
 
   Future<void> _loadGoals() async {
@@ -76,6 +93,9 @@ class _GoalsScreenState extends State<GoalsScreen> {
   }
 
   void _openCreateGoal() async {
+    // capture messenger before awaiting to avoid using BuildContext across async gaps
+    final messenger = ScaffoldMessenger.of(context);
+
     final newGoal = await showModalBottomSheet<Goal>(
       context: context,
       isScrollControlled: true,
@@ -88,17 +108,17 @@ class _GoalsScreenState extends State<GoalsScreen> {
 
     if (newGoal != null) {
       // Use repository to persist and get canonical record (clientId/serverId)
+      // Convert entered amounts (which are in the selected currency) to base (USD)
       final payload = {
         'title': newGoal.title,
-        'target_amount': newGoal.target,
-        'saved_amount': newGoal.saved,
+        'target_amount': CurrencyService().convertToBase(newGoal.target),
+        'saved_amount': CurrencyService().convertToBase(newGoal.saved),
         'deadline': newGoal.deadline?.toIso8601String(),
         'createdAt': DateTime.now().toIso8601String(),
         'updatedAt': DateTime.now().toIso8601String(),
         'extra': null,
       };
 
-      final messenger = ScaffoldMessenger.of(context);
       messenger.showSnackBar(SnackBar(
         duration: const Duration(days: 1),
         content: Row(children: const [SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)), SizedBox(width: 12), Text('Creando meta...')]),
@@ -162,6 +182,8 @@ class _GoalsScreenState extends State<GoalsScreen> {
 
   Future<void> _onContribute(Goal g) async {
     final ctrl = TextEditingController();
+    // capture messenger before awaiting dialogs to avoid BuildContext across async gaps
+    final messenger = ScaffoldMessenger.of(context);
     final res = await showDialog<double?>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -179,11 +201,24 @@ class _GoalsScreenState extends State<GoalsScreen> {
 
     if (res == null || res <= 0) return;
 
+    // convert entered contribution (in selected currency) to base for storage
+    final contribAmountBase = CurrencyService().convertToBase(res);
+
     // Ensure the goal has an identifier in local DB. If both clientId and serverId are missing
     // persist the goal via Repository.createGoal to generate a clientId and enqueue sync.
     String? idToUse = g.clientId ?? g.serverId;
     if (idToUse == null) {
-      final rec = await Repository().createGoal(g.toRecord());
+      // create goal with amounts converted to base currency
+      final createdPayload = {
+        'title': g.title,
+        'target_amount': CurrencyService().convertToBase(g.target),
+        'saved_amount': CurrencyService().convertToBase(g.saved),
+        'deadline': g.deadline?.toIso8601String(),
+        'createdAt': DateTime.now().toIso8601String(),
+        'updatedAt': DateTime.now().toIso8601String(),
+        'extra': null,
+      };
+      final rec = await Repository().createGoal(createdPayload);
       final created = Map<String, dynamic>.from(rec);
       final createdGoal = Goal.fromMap(created);
       // replace the UI instance with the canonical one
@@ -197,12 +232,12 @@ class _GoalsScreenState extends State<GoalsScreen> {
       g = _goals.firstWhere((x) => x.clientId == idToUse || x.serverId == idToUse, orElse: () => g);
     }
 
-    // optimistic update
-    setState(() => g.saved += res);
+    // optimistic update (use base amount)
+    setState(() => g.saved += contribAmountBase);
 
     try {
       // repository will look up by clientId or serverId
-      final resp = await Repository().contributeToGoal(idToUse!, res);
+      final resp = await Repository().contributeToGoal(idToUse!, contribAmountBase);
       final updated = Map<String, dynamic>.from(resp);
       final updatedGoal = Goal.fromMap(updated);
       if (!mounted) return;
@@ -210,10 +245,10 @@ class _GoalsScreenState extends State<GoalsScreen> {
         final idx = _goals.indexWhere((x) => x.clientId == updatedGoal.clientId || x.serverId == updatedGoal.serverId);
         if (idx >= 0) _goals[idx] = updatedGoal;
       });
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Aporte registrado')));
+      messenger.showSnackBar(const SnackBar(content: Text('Aporte registrado')));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Aporte guardado localmente (sincronización pendiente)')));
+      messenger.showSnackBar(const SnackBar(content: Text('Aporte guardado localmente (sincronización pendiente)')));
     }
   }
 
@@ -286,6 +321,9 @@ class _GoalsScreenState extends State<GoalsScreen> {
           Row(children: [Expanded(child: OutlinedButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cerrar'))), const SizedBox(width: 8), OutlinedButton(
             style: OutlinedButton.styleFrom(foregroundColor: Colors.redAccent),
             onPressed: () async {
+              // capture context-dependent objects before awaiting
+              final outerNavigator = Navigator.of(context);
+              final outerMessenger = ScaffoldMessenger.of(context);
               final confirmed = await showDialog<bool>(
                 context: ctx,
                 builder: (confirmCtx) => AlertDialog(
@@ -316,10 +354,9 @@ class _GoalsScreenState extends State<GoalsScreen> {
                   final delCtx = await Repository().deleteGoal(idToUse);
                   if (!mounted) return;
                   setState(() => _goals.removeWhere((x) => x.clientId == g.clientId || x.serverId == g.serverId));
-                  Navigator.of(context).pop();
+                  outerNavigator.pop();
 
-                  final messenger = ScaffoldMessenger.of(context);
-                  messenger.showSnackBar(SnackBar(
+                  outerMessenger.showSnackBar(SnackBar(
                     content: Text('Meta eliminada — Separado eliminado: ${fmtMoneyOrPlaceholder(separatedForGoal)}'),
                     action: SnackBarAction(
                       label: 'Deshacer',
@@ -334,16 +371,16 @@ class _GoalsScreenState extends State<GoalsScreen> {
                               _goals.insert(0, Goal.fromMap(restored));
                             });
                           }
-                          messenger.showSnackBar(const SnackBar(content: Text('Meta restaurada')));
+                          outerMessenger.showSnackBar(const SnackBar(content: Text('Meta restaurada')));
                         } catch (e) {
-                          messenger.showSnackBar(SnackBar(content: Text('No se pudo restaurar: ${e.toString()}')));
+                          outerMessenger.showSnackBar(SnackBar(content: Text('No se pudo restaurar: ${e.toString()}')));
                         }
                       },
                     ),
                   ));
                 } catch (e) {
                   if (!mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error al eliminar: ${e.toString()}')));
+                  outerMessenger.showSnackBar(SnackBar(content: Text('Error al eliminar: ${e.toString()}')));
                 }
               }
             },
@@ -420,6 +457,7 @@ class _GoalsScreenState extends State<GoalsScreen> {
       ),
     );
   }
+
 }
 
 class _CreateGoalCard extends StatefulWidget {

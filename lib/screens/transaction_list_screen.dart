@@ -18,6 +18,14 @@ class _TransactionListScreenState extends State<TransactionListScreen> {
   void initState() {
     super.initState();
     _load();
+    // refresh when repository signals data changes
+    Repository().dataVersion.addListener(_load);
+  }
+
+  @override
+  void dispose() {
+    Repository().dataVersion.removeListener(_load);
+    super.dispose();
   }
 
   Future<void> _load() async {

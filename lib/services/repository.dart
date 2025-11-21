@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 
 import 'app_config.dart';
@@ -17,6 +18,8 @@ class Repository {
   final _uuid = const Uuid();
   final _db = LocalDb();
   final _api = AppConfig.apiInstance();
+  // Simple notifier to let screens refresh when local data changes
+  final ValueNotifier<int> dataVersion = ValueNotifier<int>(0);
 
   /// Initialize local DB and start sync manager if needed.
   Future<void> init() async {
@@ -156,6 +159,9 @@ class Repository {
     // Persist locally
     await _db.insertTransactionLocal(record);
 
+    // notify listeners UI may want to refresh
+    dataVersion.value++;
+
     // Enqueue for sync
     await _db.addSyncChange(clientId, 'create', 'transactions', record);
 
@@ -258,6 +264,8 @@ class Repository {
     };
 
     await _db.insertGoalLocal(record);
+    // notify UI listeners
+    dataVersion.value++;
     await _db.addSyncChange(clientId, 'create', 'goals', record);
 
     try {
@@ -408,6 +416,8 @@ class Repository {
 
     // Persist updated goal locally (replace by clientId)
     await _db.insertGoalLocal(updated);
+    // notify UI listeners about goal update and new contribution
+    dataVersion.value++;
 
     // Create a contribution record (separated money) and persist locally
     final contribClientId = 'c_contrib_${_uuid.v4()}';

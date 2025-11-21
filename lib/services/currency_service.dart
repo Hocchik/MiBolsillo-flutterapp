@@ -1,9 +1,10 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
-class CurrencyService {
+class CurrencyService extends ChangeNotifier {
   static final CurrencyService _instance = CurrencyService._internal();
   factory CurrencyService() => _instance;
   CurrencyService._internal();
@@ -58,6 +59,7 @@ class CurrencyService {
         if (v != null) rates[k] = v;
       }
       lastUpdated = DateTime.now();
+      notifyListeners();
     }
   }
 
@@ -87,5 +89,6 @@ class CurrencyService {
     selectedCurrency = code;
     final p = await SharedPreferences.getInstance();
     await p.setString(_prefsKey, code);
+    notifyListeners();
   }
 }
